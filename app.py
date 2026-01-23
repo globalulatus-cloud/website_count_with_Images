@@ -91,6 +91,14 @@ st.markdown("""
 st.title("Ulatus Website Counter Tool")
 st.write("Professional Website Content & Image Analysis")
 
+# --- SESSION STATE INITIALIZATION ---
+if 'crawl_results' not in st.session_state:
+    st.session_state.crawl_results = None
+if 'single_results' not in st.session_state:
+    st.session_state.single_results = None
+if 'analyzed_urls' not in st.session_state:
+    st.session_state.analyzed_urls = []
+
 # --- CACHING FOR PERFORMANCE ---
 @st.cache_data(ttl=3600)
 def cached_crawl(root_url, max_pages, max_depth, follow_external):
@@ -149,7 +157,12 @@ with tab1:
                             "Missing Alt": 0
                         })
                 
-                # Summary Columns
+                # Store in session state
+                st.session_state.single_results = results
+                st.session_state.analyzed_urls = urls
+    
+    # Display results if they exist
+    if st.session_state.single_results:
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
@@ -258,99 +271,110 @@ with tab2:
                     )
                     progress_bar.progress(100)
                     
-                    if not crawl_results:
-                        st.warning("No pages found or analysis failed.")
-                    else:
-                        status_text.text(f"✅ Successfully crawled {len(crawl_results)} pages!")
-                        
-                        # Aggregation
-                        total_count = sum(r['stats']['count'] for r in crawl_results)
-                        total_images = sum(r.get('image_stats', {}).get('total_images', 0) for r in crawl_results)
-                        total_images_without_alt = sum(r.get('image_stats', {}).get('images_without_alt', 0) for r in crawl_results)
-                        primary_group = "CJK" if any(r['stats']['language_group'] == "CJK" for r in crawl_results) else "Latin"
-                        
-                        # Summary Columns
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
-                        with col2:
-                            st.markdown(f'<div class="metric-card"><div class="metric-label">Pages Crawled</div><div class="metric-value">{len(crawl_results)}</div></div>', unsafe_allow_html=True)
-                        with col3:
-                            st.markdown(f'<div class="metric-card"><div class="metric-label">Total Images</div><div class="metric-value">{total_images}</div></div>', unsafe_allow_html=True)
-                        with col4:
-                            st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
-                        
-                        # Accessibility Warning
-                        if total_images_without_alt > 0:
-                            accessibility_pct = round((total_images_without_alt / total_images * 100) if total_images > 0 else 0, 1)
-                            st.markdown(f'<div class="warning-box">⚠️ <strong>Accessibility Issue:</strong> {total_images_without_alt} images ({accessibility_pct}%) missing alt text</div>', unsafe_allow_html=True)
-                        
-                        # Detailed Results
-                        st.write("### Detailed Analysis")
-                        flattened_results = []
-                        for res in crawl_results:
-                            img_stats = res.get('image_stats', {})
-                            flattened_results.append({
-                                "URL": res['url'],
-                                "Title": res['title'],
-                                "Word Count": res['stats']['count'],
-                                "Type": res['stats']['type'].upper(),
-                                "Group": res['stats']['language_group'],
-                                "Images": img_stats.get('total_images', 0),
-                                "Missing Alt": img_stats.get('images_without_alt', 0),
-                                "With Title": img_stats.get('images_with_title', 0)
-                            })
-                        
-                        df_crawl = pd.DataFrame(flattened_results)
-                        st.dataframe(df_crawl, use_container_width=True)
-                        
-                        # Image Details Section
-                        if st.checkbox("📸 Show Detailed Image Analysis", value=False):
-                            st.write("### Complete Image Inventory")
-                            
-                            all_images = []
-                            for res in crawl_results:
-                                page_url = res['url']
-                                img_details = res.get('image_stats', {}).get('image_details', [])
-                                
-                                for img in img_details:
-                                    all_images.append({
-                                        "Page URL": page_url,
-                                        "Image URL": img['src'],
-                                        "Alt Text": img['alt'] or "❌ Missing",
-                                        "Title": img['title'] or "-",
-                                        "Has Metadata": "✅" if img['has_metadata'] else "❌",
-                                        "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
-                                    })
-                            
-                            if all_images:
-                                df_images = pd.DataFrame(all_images)
-                                st.dataframe(df_images, use_container_width=True)
-                                
-                                # CSV Export for Images
-                                csv_images = df_images.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label="📥 Download Image Details CSV",
-                                    data=csv_images,
-                                    file_name="ulatus_image_inventory.csv",
-                                    mime="text/csv",
-                                    key="download_images"
-                                )
-                            else:
-                                st.info("No images found on the crawled pages.")
-                        
-                        # CSV Export
-                        csv_crawl = df_crawl.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Full Crawl Report",
-                            data=csv_crawl,
-                            file_name="ulatus_crawl_report.csv",
-                            mime="text/csv",
-                            key="download_crawl"
-                        )
+                    # Store in session state
+                    st.session_state.crawl_results = crawl_results
+                    
                 except Exception as e:
                     st.error(f"Crawling failed: {str(e)}")
                     st.info("Try reducing the crawl depth or check if the website is accessible.")
+    
+    # Display results if they exist
+    if st.session_state.crawl_results:
+        crawl_results = st.session_state.crawl_results
+    # Display results if they exist
+    if st.session_state.crawl_results:
+        crawl_results = st.session_state.crawl_results
+        
+        if not crawl_results:
+            st.warning("No pages found or analysis failed.")
+        else:
+            st.success(f"✅ Successfully crawled {len(crawl_results)} pages!")
+            
+            # Aggregation
+            total_count = sum(r['stats']['count'] for r in crawl_results)
+            total_images = sum(r.get('image_stats', {}).get('total_images', 0) for r in crawl_results)
+            total_images_without_alt = sum(r.get('image_stats', {}).get('images_without_alt', 0) for r in crawl_results)
+            primary_group = "CJK" if any(r['stats']['language_group'] == "CJK" for r in crawl_results) else "Latin"
+            
+            # Summary Columns
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Pages Crawled</div><div class="metric-value">{len(crawl_results)}</div></div>', unsafe_allow_html=True)
+            with col3:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Total Images</div><div class="metric-value">{total_images}</div></div>', unsafe_allow_html=True)
+            with col4:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
+            
+            # Accessibility Warning
+            if total_images_without_alt > 0:
+                accessibility_pct = round((total_images_without_alt / total_images * 100) if total_images > 0 else 0, 1)
+                st.markdown(f'<div class="warning-box">⚠️ <strong>Accessibility Issue:</strong> {total_images_without_alt} images ({accessibility_pct}%) missing alt text</div>', unsafe_allow_html=True)
+            
+            # Detailed Results
+            st.write("### Detailed Analysis")
+            flattened_results = []
+            for res in crawl_results:
+                img_stats = res.get('image_stats', {})
+                flattened_results.append({
+                    "URL": res['url'],
+                    "Title": res['title'],
+                    "Word Count": res['stats']['count'],
+                    "Type": res['stats']['type'].upper(),
+                    "Group": res['stats']['language_group'],
+                    "Images": img_stats.get('total_images', 0),
+                    "Missing Alt": img_stats.get('images_without_alt', 0),
+                    "With Title": img_stats.get('images_with_title', 0)
+                })
+            
+            df_crawl = pd.DataFrame(flattened_results)
+            st.dataframe(df_crawl, use_container_width=True)
+            
+            # Image Details Section
+            if st.checkbox("📸 Show Detailed Image Analysis", value=False):
+                st.write("### Complete Image Inventory")
+                
+                all_images = []
+                for res in crawl_results:
+                    page_url = res['url']
+                    img_details = res.get('image_stats', {}).get('image_details', [])
+                    
+                    for img in img_details:
+                        all_images.append({
+                            "Page URL": page_url,
+                            "Image URL": img['src'],
+                            "Alt Text": img['alt'] or "❌ Missing",
+                            "Title": img['title'] or "-",
+                            "Has Metadata": "✅" if img['has_metadata'] else "❌",
+                            "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
+                        })
+                
+                if all_images:
+                    df_images = pd.DataFrame(all_images)
+                    st.dataframe(df_images, use_container_width=True)
+                    
+                    # CSV Export for Images
+                    csv_images = df_images.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Image Details CSV",
+                        data=csv_images,
+                        file_name="ulatus_image_inventory.csv",
+                        mime="text/csv",
+                        key="download_images"
+                    )
+                else:
+                    st.info("No images found on the crawled pages.")
+            
+            # CSV Export
+            csv_crawl = df_crawl.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Full Crawl Report",
+                data=csv_crawl,
+                file_name="ulatus_crawl_report.csv",
+                mime="text/csv",
+                key="download_crawl"
+            )
 
 # --- FOOTER ---
 st.markdown("---")
