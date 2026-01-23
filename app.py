@@ -169,7 +169,45 @@ with tab1:
                 df = pd.DataFrame(results)
                 st.dataframe(df, use_container_width=True)
                 
-                # CSV Export
+                # Image Details Section
+                if st.checkbox("📸 Show Detailed Image Analysis", value=False, key="show_images_single"):
+                    st.write("### Complete Image Inventory")
+                    
+                    all_images = []
+                    for url in urls:
+                        try:
+                            from logic.scraper import get_image_details_from_url
+                            img_details = asyncio.run(get_image_details_from_url(url))
+                            
+                            for img in img_details:
+                                all_images.append({
+                                    "Page URL": url,
+                                    "Image URL": img['src'],
+                                    "Alt Text": img['alt'] or "❌ Missing",
+                                    "Title": img['title'] or "-",
+                                    "Has Metadata": "✅" if img['has_metadata'] else "❌",
+                                    "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
+                                })
+                        except Exception as e:
+                            st.warning(f"Could not fetch image details for {url}: {str(e)}")
+                    
+                    if all_images:
+                        df_images = pd.DataFrame(all_images)
+                        st.dataframe(df_images, use_container_width=True)
+                        
+                        # CSV Export for Images
+                        csv_images = df_images.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download Image Details CSV",
+                            data=csv_images,
+                            file_name="ulatus_image_inventory.csv",
+                            mime="text/csv",
+                            key="download_images_single"
+                        )
+                    else:
+                        st.info("No images found on the analyzed pages.")
+                
+                # Page CSV Export
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download CSV Report",
@@ -265,6 +303,41 @@ with tab2:
                         
                         df_crawl = pd.DataFrame(flattened_results)
                         st.dataframe(df_crawl, use_container_width=True)
+                        
+                        # Image Details Section
+                        if st.checkbox("📸 Show Detailed Image Analysis", value=False):
+                            st.write("### Complete Image Inventory")
+                            
+                            all_images = []
+                            for res in crawl_results:
+                                page_url = res['url']
+                                img_details = res.get('image_stats', {}).get('image_details', [])
+                                
+                                for img in img_details:
+                                    all_images.append({
+                                        "Page URL": page_url,
+                                        "Image URL": img['src'],
+                                        "Alt Text": img['alt'] or "❌ Missing",
+                                        "Title": img['title'] or "-",
+                                        "Has Metadata": "✅" if img['has_metadata'] else "❌",
+                                        "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
+                                    })
+                            
+                            if all_images:
+                                df_images = pd.DataFrame(all_images)
+                                st.dataframe(df_images, use_container_width=True)
+                                
+                                # CSV Export for Images
+                                csv_images = df_images.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label="📥 Download Image Details CSV",
+                                    data=csv_images,
+                                    file_name="ulatus_image_inventory.csv",
+                                    mime="text/csv",
+                                    key="download_images"
+                                )
+                            else:
+                                st.info("No images found on the crawled pages.")
                         
                         # CSV Export
                         csv_crawl = df_crawl.to_csv(index=False).encode('utf-8')
