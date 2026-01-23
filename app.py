@@ -121,9 +121,6 @@ with tab1:
         else:
             with st.spinner("Analyzing Content..."):
                 results = []
-                total_count = 0
-                total_images = 0
-                total_images_without_alt = 0
                 
                 for url in urls:
                     try:
@@ -143,9 +140,6 @@ with tab1:
                             "Images": image_stats['total_images'],
                             "Missing Alt": image_stats['images_without_alt']
                         })
-                        total_count += stats['count']
-                        total_images += image_stats['total_images']
-                        total_images_without_alt += image_stats['images_without_alt']
                     except Exception as e:
                         results.append({
                             "URL": url,
@@ -161,74 +155,82 @@ with tab1:
                 st.session_state.single_results = results
                 st.session_state.analyzed_urls = urls
     
-    # Display results if they exist
+    # Display results if they exist in session state
     if st.session_state.single_results:
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
-                with col2:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Pages</div><div class="metric-value">{len(results)}</div></div>', unsafe_allow_html=True)
-                with col3:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total Images</div><div class="metric-value">{total_images}</div></div>', unsafe_allow_html=True)
-                with col4:
-                    primary_group = results[0]['Group'] if results and 'Error' not in str(results[0]['Group']) else "-"
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
-                
-                # Accessibility Warning
-                if total_images_without_alt > 0:
-                    st.markdown(f'<div class="warning-box">⚠️ <strong>Accessibility Issue:</strong> {total_images_without_alt} images missing alt text</div>', unsafe_allow_html=True)
-                
-                st.write("### Detailed Analysis")
-                df = pd.DataFrame(results)
-                st.dataframe(df, use_container_width=True)
-                
-                # Image Details Section
-                if st.checkbox("📸 Show Detailed Image Analysis", value=False, key="show_images_single"):
-                    st.write("### Complete Image Inventory")
+        results = st.session_state.single_results
+        
+        # Calculate totals from stored results
+        total_count = sum(r['Word Count'] for r in results if isinstance(r['Word Count'], (int, float)))
+        total_images = sum(r['Images'] for r in results if isinstance(r['Images'], (int, float)))
+        total_images_without_alt = sum(r['Missing Alt'] for r in results if isinstance(r['Missing Alt'], (int, float)))
+        
+        # Summary Columns
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Pages</div><div class="metric-value">{len(results)}</div></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Total Images</div><div class="metric-value">{total_images}</div></div>', unsafe_allow_html=True)
+        with col4:
+            primary_group = results[0]['Group'] if results and 'Error' not in str(results[0]['Group']) else "-"
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
+        
+        # Accessibility Warning
+        if total_images_without_alt > 0:
+            st.markdown(f'<div class="warning-box">⚠️ <strong>Accessibility Issue:</strong> {total_images_without_alt} images missing alt text</div>', unsafe_allow_html=True)
+        
+        st.write("### Detailed Analysis")
+        df = pd.DataFrame(results)
+        st.dataframe(df, width="stretch")
+        
+        # Image Details Section
+        if st.checkbox("📸 Show Detailed Image Analysis", value=False, key="show_images_single"):
+            st.write("### Complete Image Inventory")
+            
+            all_images = []
+            for url in st.session_state.analyzed_urls:
+                try:
+                    from logic.scraper import get_image_details_from_url
+                    img_details = asyncio.run(get_image_details_from_url(url))
                     
-                    all_images = []
-                    for url in urls:
-                        try:
-                            from logic.scraper import get_image_details_from_url
-                            img_details = asyncio.run(get_image_details_from_url(url))
-                            
-                            for img in img_details:
-                                all_images.append({
-                                    "Page URL": url,
-                                    "Image URL": img['src'],
-                                    "Alt Text": img['alt'] or "❌ Missing",
-                                    "Title": img['title'] or "-",
-                                    "Has Metadata": "✅" if img['has_metadata'] else "❌",
-                                    "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
-                                })
-                        except Exception as e:
-                            st.warning(f"Could not fetch image details for {url}: {str(e)}")
-                    
-                    if all_images:
-                        df_images = pd.DataFrame(all_images)
-                        st.dataframe(df_images, use_container_width=True)
-                        
-                        # CSV Export for Images
-                        csv_images = df_images.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Image Details CSV",
-                            data=csv_images,
-                            file_name="ulatus_image_inventory.csv",
-                            mime="text/csv",
-                            key="download_images_single"
-                        )
-                    else:
-                        st.info("No images found on the analyzed pages.")
+                    for img in img_details:
+                        all_images.append({
+                            "Page URL": url,
+                            "Image URL": img['src'],
+                            "Alt Text": img['alt'] or "❌ Missing",
+                            "Title": img['title'] or "-",
+                            "Has Metadata": "✅" if img['has_metadata'] else "❌",
+                            "Data Attributes": ", ".join(img['data_attributes']) if img['data_attributes'] else "-"
+                        })
+                except Exception as e:
+                    st.warning(f"Could not fetch image details for {url}: {str(e)}")
+            
+            if all_images:
+                df_images = pd.DataFrame(all_images)
+                st.dataframe(df_images, width="stretch")
                 
-                # Page CSV Export
-                csv = df.to_csv(index=False).encode('utf-8')
+                # CSV Export for Images
+                csv_images = df_images.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="📥 Download CSV Report",
-                    data=csv,
-                    file_name="ulatus_linguistic_report.csv",
+                    label="📥 Download Image Details CSV",
+                    data=csv_images,
+                    file_name="ulatus_image_inventory.csv",
                     mime="text/csv",
-                    key="download_single"
+                    key="download_images_single"
                 )
+            else:
+                st.info("No images found on the analyzed pages.")
+        
+        # Page CSV Export
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download CSV Report",
+            data=csv,
+            file_name="ulatus_linguistic_report.csv",
+            mime="text/csv",
+            key="download_single"
+        )
 
 with tab2:
     root_url = st.text_input(
@@ -278,9 +280,6 @@ with tab2:
                     st.error(f"Crawling failed: {str(e)}")
                     st.info("Try reducing the crawl depth or check if the website is accessible.")
     
-    # Display results if they exist
-    if st.session_state.crawl_results:
-        crawl_results = st.session_state.crawl_results
     # Display results if they exist
     if st.session_state.crawl_results:
         crawl_results = st.session_state.crawl_results
