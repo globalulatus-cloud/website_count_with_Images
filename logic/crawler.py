@@ -1,3 +1,4 @@
+# logic/crawler.py
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -5,6 +6,7 @@ from urllib.parse import urljoin, urlparse
 from typing import Set, List, Dict, Optional
 import xml.etree.ElementTree as ET
 from logic.counter import count_stats
+import ssl
 
 class EnhancedWebsiteCrawler:
     def __init__(self, root_url: str, max_pages: Optional[int] = None, 
@@ -16,6 +18,7 @@ class EnhancedWebsiteCrawler:
         self.visited_urls: Set[str] = set()
         self.results: List[Dict] = []
         self.domain = urlparse(root_url).netloc
+        self.errors: List[Dict] = []
         
     def is_valid_url(self, url: str) -> bool:
         """Check if URL should be crawled"""
@@ -49,7 +52,7 @@ class EnhancedWebsiteCrawler:
         
         for sitemap_url in sitemap_locations:
             try:
-                async with session.get(sitemap_url, timeout=10) as response:
+                async with session.get(sitemap_url, timeout=10, ssl=False) as response:
                     if response.status == 200:
                         content = await response.text()
                         root = ET.fromstring(content)
@@ -67,7 +70,7 @@ class EnhancedWebsiteCrawler:
                             if loc is not None:
                                 sitemap_urls.add(loc.text)
                         
-                        print(f"Found {len(sitemap_urls)} URLs in sitemap")
+                        print(f"✓ Found {len(sitemap_urls)} URLs in sitemap")
                         break
             except Exception as e:
                 print(f"Could not fetch sitemap {sitemap_url}: {e}")
@@ -79,7 +82,7 @@ class EnhancedWebsiteCrawler:
         """Fetch a specific sitemap file"""
         urls = set()
         try:
-            async with session.get(url, timeout=10) as response:
+            async with session.get(url, timeout=10, ssl=False) as response:
                 if response.status == 200:
                     content = await response.text()
                     root = ET.fromstring(content)
@@ -164,9 +167,26 @@ class EnhancedWebsiteCrawler:
         self.visited_urls.add(url)
         
         try:
-            async with session.get(url, timeout=15) as response:
+            # Enhanced request with better headers and SSL handling
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+            
+            async with session.get(
+                url, 
+                timeout=30,  # Increased timeout
+                ssl=False,   # Disable SSL verification for problematic sites
+                headers=headers,
+                allow_redirects=True  # Follow redirects
+            ) as response:
                 if response.status != 200:
-                    print(f"Failed to fetch {url}: Status {response.status}")
+                    error_msg = f"HTTP {response.status}"
+                    print(f"✗ Failed to fetch {url}: {error_msg}")
+                    self.errors.append({'url': url, 'error': error_msg})
                     return [], None
                 
                 html = await response.text()
@@ -195,6 +215,8 @@ class EnhancedWebsiteCrawler:
                     'depth': depth
                 }
                 
+                print(f"✓ Crawled: {url} (Depth: {depth}, Words: {stats['count']}, Images: {image_stats['total_images']})")
+                
                 # Extract links for further crawling
                 links = []
                 for link in soup.find_all('a', href=True):
@@ -206,14 +228,33 @@ class EnhancedWebsiteCrawler:
                 
                 return links, result
                 
+        except asyncio.TimeoutError:
+            error_msg = "Request timeout (30s)"
+            print(f"✗ Timeout: {url}")
+            self.errors.append({'url': url, 'error': error_msg})
+            return [], None
+        except aiohttp.ClientError as e:
+            error_msg = f"Connection error: {str(e)}"
+            print(f"✗ Connection error for {url}: {str(e)}")
+            self.errors.append({'url': url, 'error': error_msg})
+            return [], None
         except Exception as e:
-            print(f"Error crawling {url}: {str(e)}")
+            error_msg = f"Error: {str(e)}"
+            print(f"✗ Error crawling {url}: {str(e)}")
+            self.errors.append({'url': url, 'error': error_msg})
             return [], None
     
     async def crawl(self):
         """Main crawl function with BFS approach"""
-        async with aiohttp.ClientSession() as session:
+        # Create SSL context that doesn't verify certificates
+        connector = aiohttp.TCPConnector(ssl=False, limit=10)
+        timeout = aiohttp.ClientTimeout(total=60, connect=30)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            print(f"\n🔍 Starting crawl of {self.root_url}...")
+            
             # Try to get sitemap first
+            print("📄 Checking for sitemap...")
             sitemap_urls = await self.fetch_sitemap(session)
             
             # Start with root URL and sitemap URLs
@@ -224,10 +265,12 @@ class EnhancedWebsiteCrawler:
                 if self.is_valid_url(url):
                     queue.append((url, 0))
             
+            print(f"📋 Queue initialized with {len(queue)} URLs")
+            
             while queue:
                 # Limit concurrent requests
-                batch = queue[:10]  # Process 10 URLs at a time
-                queue = queue[10:]
+                batch = queue[:5]  # Reduced from 10 to be gentler on servers
+                queue = queue[5:]
                 
                 tasks = [self.crawl_page(session, url, depth) for url, depth in batch]
                 results = await asyncio.gather(*tasks)
@@ -244,10 +287,21 @@ class EnhancedWebsiteCrawler:
                 
                 # Check if we've hit max pages
                 if self.max_pages and len(self.visited_urls) >= self.max_pages:
+                    print(f"⚠️ Reached max pages limit ({self.max_pages})")
                     break
                 
                 # Progress feedback
-                print(f"Crawled {len(self.visited_urls)} pages, {len(queue)} in queue")
+                print(f"📊 Progress: {len(self.visited_urls)} pages crawled, {len(queue)} in queue")
+        
+        # Print summary
+        print(f"\n✅ Crawl complete!")
+        print(f"   Pages crawled: {len(self.results)}")
+        print(f"   Errors: {len(self.errors)}")
+        
+        if self.errors:
+            print(f"\n⚠️ Errors encountered:")
+            for error in self.errors[:5]:  # Show first 5 errors
+                print(f"   - {error['url']}: {error['error']}")
         
         return self.results
 
@@ -259,6 +313,7 @@ async def crawl_site(root_url: str, max_pages: Optional[int] = None,
     2. Follows links recursively with depth control
     3. Analyzes images and metadata
     4. Respects max_pages limit
+    5. Better error handling and SSL support
     """
     crawler = EnhancedWebsiteCrawler(root_url, max_pages, max_depth, follow_external)
     results = await crawler.crawl()
