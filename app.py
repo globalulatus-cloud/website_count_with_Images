@@ -329,7 +329,7 @@ with tab2:
                 })
             
             df_crawl = pd.DataFrame(flattened_results)
-            st.dataframe(df_crawl, use_container_width=True)
+            st.dataframe(df_crawl, width="stretch")
             
             # Image Details Section
             if st.checkbox("📸 Show Detailed Image Analysis", value=False):
@@ -352,7 +352,7 @@ with tab2:
                 
                 if all_images:
                     df_images = pd.DataFrame(all_images)
-                    st.dataframe(df_images, use_container_width=True)
+                    st.dataframe(df_images, width="stretch")
                     
                     # CSV Export for Images
                     csv_images = df_images.to_csv(index=False).encode('utf-8')
