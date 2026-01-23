@@ -32,7 +32,7 @@ Professional website content and image analysis tool for translation services.
 ## Installation
 ```bash
 # Clone the repository
-git clone <your-repo-url>
+git clone <https://github.com/globalulatus-cloud/website_count_with_Images>
 cd ulatus-website-counter
 
 # Install dependencies
