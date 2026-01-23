@@ -185,43 +185,36 @@ with tab2:
         placeholder="https://example.com"
     )
     
-    col1, col2 = st.columns(2)
-    with col1:
-        max_pages = st.number_input(
-            "Max pages to crawl (0 = unlimited)",
-            min_value=0,
-            value=100,
-            step=10,
-            help="Recommended: 100-500 for faster results"
-        )
-    with col2:
+    st.info("ℹ️ This will crawl the **entire website** - all pages will be analyzed automatically.")
+    
+    with st.expander("⚙️ Advanced Options (Optional)"):
         max_depth = st.number_input(
             "Max crawl depth",
             min_value=1,
-            value=5,
+            value=10,
             step=1,
-            help="How many levels deep to follow links"
+            help="How many levels deep to follow links (default: 10 - sufficient for most websites)"
+        )
+        
+        follow_external = st.checkbox(
+            "Follow external links",
+            value=False,
+            help="Crawl links outside the main domain"
         )
     
-    follow_external = st.checkbox(
-        "Follow external links",
-        value=False,
-        help="Crawl links outside the main domain"
-    )
-    
-    if st.button("🚀 Start Crawl", key="analyze_crawl"):
+    if st.button("🚀 Start Complete Website Crawl", key="analyze_crawl"):
         if not root_url.strip():
             st.error("Please enter a website URL")
         else:
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            with st.spinner("Crawling Website..."):
+            with st.spinner("Crawling Entire Website... This may take a few minutes for large sites."):
                 try:
-                    status_text.text("Starting crawl...")
+                    status_text.text("Starting complete website crawl...")
                     crawl_results = cached_crawl(
                         root_url,
-                        max_pages if max_pages > 0 else None,
+                        None,  # No max_pages limit - crawl everything
                         max_depth,
                         follow_external
                     )
@@ -284,7 +277,7 @@ with tab2:
                         )
                 except Exception as e:
                     st.error(f"Crawling failed: {str(e)}")
-                    st.info("Try reducing the max pages or check if the website is accessible.")
+                    st.info("Try reducing the crawl depth or check if the website is accessible.")
 
 # --- FOOTER ---
 st.markdown("---")
