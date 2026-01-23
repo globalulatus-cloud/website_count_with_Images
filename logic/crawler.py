@@ -7,6 +7,7 @@ from typing import Set, List, Dict, Optional
 import xml.etree.ElementTree as ET
 from logic.counter import count_stats
 import ssl
+import time
 
 class EnhancedWebsiteCrawler:
     def __init__(self, root_url: str, max_pages: Optional[int] = None, 
@@ -19,6 +20,8 @@ class EnhancedWebsiteCrawler:
         self.results: List[Dict] = []
         self.domain = urlparse(root_url).netloc
         self.errors: List[Dict] = []
+        self.rate_limit_delay = 0.5  # Start with 0.5 second delay between requests
+        self.consecutive_429s = 0
         
     def is_valid_url(self, url: str) -> bool:
         """Check if URL should be crawled"""
@@ -157,7 +160,7 @@ class EnhancedWebsiteCrawler:
         return image_stats
     
     async def crawl_page(self, session: aiohttp.ClientSession, url: str, depth: int) -> tuple:
-        """Crawl a single page and extract links"""
+        """Crawl a single page and extract links with rate limiting"""
         if url in self.visited_urls or depth > self.max_depth:
             return [], None
         
@@ -166,83 +169,120 @@ class EnhancedWebsiteCrawler:
         
         self.visited_urls.add(url)
         
-        try:
-            # Enhanced request with better headers and SSL handling
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-            }
-            
-            async with session.get(
-                url, 
-                timeout=30,  # Increased timeout
-                ssl=False,   # Disable SSL verification for problematic sites
-                headers=headers,
-                allow_redirects=True  # Follow redirects
-            ) as response:
-                if response.status != 200:
-                    error_msg = f"HTTP {response.status}"
-                    print(f"✗ Failed to fetch {url}: {error_msg}")
-                    self.errors.append({'url': url, 'error': error_msg})
-                    return [], None
-                
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Extract text content
-                for script in soup(["script", "style", "nav", "footer"]):
-                    script.decompose()
-                text = soup.get_text(separator=' ', strip=True)
-                
-                # Get title
-                title = soup.title.string if soup.title else url
-                
-                # Count statistics
-                stats = count_stats(text)
-                
-                # Analyze images
-                image_stats = self.analyze_images(soup)
-                
-                # Store results
-                result = {
-                    'url': url,
-                    'title': title,
-                    'stats': stats,
-                    'image_stats': image_stats,
-                    'depth': depth
+        # Rate limiting delay
+        await asyncio.sleep(self.rate_limit_delay)
+        
+        # Retry logic for 429 errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Enhanced request with better headers and SSL handling
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
                 }
                 
-                print(f"✓ Crawled: {url} (Depth: {depth}, Words: {stats['count']}, Images: {image_stats['total_images']})")
-                
-                # Extract links for further crawling
-                links = []
-                for link in soup.find_all('a', href=True):
-                    absolute_url = urljoin(url, link['href'])
-                    # Clean URL (remove fragments)
-                    absolute_url = absolute_url.split('#')[0]
-                    if self.is_valid_url(absolute_url) and absolute_url not in self.visited_urls:
-                        links.append(absolute_url)
-                
-                return links, result
-                
-        except asyncio.TimeoutError:
-            error_msg = "Request timeout (30s)"
-            print(f"✗ Timeout: {url}")
-            self.errors.append({'url': url, 'error': error_msg})
-            return [], None
-        except aiohttp.ClientError as e:
-            error_msg = f"Connection error: {str(e)}"
-            print(f"✗ Connection error for {url}: {str(e)}")
-            self.errors.append({'url': url, 'error': error_msg})
-            return [], None
-        except Exception as e:
-            error_msg = f"Error: {str(e)}"
-            print(f"✗ Error crawling {url}: {str(e)}")
-            self.errors.append({'url': url, 'error': error_msg})
-            return [], None
+                async with session.get(
+                    url, 
+                    timeout=30,
+                    ssl=False,
+                    headers=headers,
+                    allow_redirects=True
+                ) as response:
+                    if response.status == 429:
+                        self.consecutive_429s += 1
+                        # Exponential backoff
+                        backoff_time = min(30, 2 ** attempt * 5)  # 5s, 10s, 20s (max 30s)
+                        print(f"⚠️ Rate limited! Waiting {backoff_time}s before retry (attempt {attempt + 1}/{max_retries})...")
+                        
+                        # Increase global delay if we're getting too many 429s
+                        if self.consecutive_429s > 5:
+                            self.rate_limit_delay = min(3.0, self.rate_limit_delay * 1.5)
+                            print(f"⚠️ Increasing rate limit delay to {self.rate_limit_delay:.1f}s")
+                        
+                        await asyncio.sleep(backoff_time)
+                        continue  # Retry
+                    
+                    if response.status != 200:
+                        error_msg = f"HTTP {response.status}"
+                        print(f"✗ Failed to fetch {url}: {error_msg}")
+                        self.errors.append({'url': url, 'error': error_msg})
+                        return [], None
+                    
+                    # Success - reset consecutive 429 counter
+                    self.consecutive_429s = 0
+                    
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Extract text content
+                    for script in soup(["script", "style", "nav", "footer"]):
+                        script.decompose()
+                    text = soup.get_text(separator=' ', strip=True)
+                    
+                    # Get title
+                    title = soup.title.string if soup.title else url
+                    
+                    # Count statistics
+                    stats = count_stats(text)
+                    
+                    # Analyze images
+                    image_stats = self.analyze_images(soup)
+                    
+                    # Store results
+                    result = {
+                        'url': url,
+                        'title': title,
+                        'stats': stats,
+                        'image_stats': image_stats,
+                        'depth': depth
+                    }
+                    
+                    print(f"✓ Crawled: {url} (Depth: {depth}, Words: {stats['count']}, Images: {image_stats['total_images']})")
+                    
+                    # Extract links for further crawling
+                    links = []
+                    for link in soup.find_all('a', href=True):
+                        absolute_url = urljoin(url, link['href'])
+                        # Clean URL (remove fragments)
+                        absolute_url = absolute_url.split('#')[0]
+                        if self.is_valid_url(absolute_url) and absolute_url not in self.visited_urls:
+                            links.append(absolute_url)
+                    
+                    return links, result
+                    
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Timeout, retrying {url} (attempt {attempt + 1}/{max_retries})...")
+                    await asyncio.sleep(5)
+                    continue
+                error_msg = "Request timeout (30s)"
+                print(f"✗ Timeout: {url}")
+                self.errors.append({'url': url, 'error': error_msg})
+                return [], None
+            except aiohttp.ClientError as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Connection error, retrying {url}...")
+                    await asyncio.sleep(5)
+                    continue
+                error_msg = f"Connection error: {str(e)}"
+                print(f"✗ Connection error for {url}: {str(e)}")
+                self.errors.append({'url': url, 'error': error_msg})
+                return [], None
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                print(f"✗ Error crawling {url}: {str(e)}")
+                self.errors.append({'url': url, 'error': error_msg})
+                return [], None
+        
+        # All retries failed
+        error_msg = "Max retries exceeded"
+        print(f"✗ Failed after {max_retries} retries: {url}")
+        self.errors.append({'url': url, 'error': error_msg})
+        return [], None
     
     async def crawl(self):
         """Main crawl function with BFS approach"""
@@ -268,9 +308,9 @@ class EnhancedWebsiteCrawler:
             print(f"📋 Queue initialized with {len(queue)} URLs")
             
             while queue:
-                # Limit concurrent requests
-                batch = queue[:5]  # Reduced from 10 to be gentler on servers
-                queue = queue[5:]
+                # Limit concurrent requests - REDUCED for better rate limiting
+                batch = queue[:2]  # Only 2 concurrent requests to avoid rate limiting
+                queue = queue[2:]
                 
                 tasks = [self.crawl_page(session, url, depth) for url, depth in batch]
                 results = await asyncio.gather(*tasks)
