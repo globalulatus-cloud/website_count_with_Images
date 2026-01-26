@@ -6,6 +6,7 @@ from logic.scraper import fetch_website_text
 from logic.counter import count_stats
 from logic.crawler import crawl_site
 from logic.vocabulary_analyzer import analyze_vocabulary, get_repetition_details
+from logic.tm_analyzer import analyze_repetitions, get_repetition_summary
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -294,6 +295,99 @@ with tab1:
                     st.info(f"No {unit} repeated 5 or more times.")
             else:
                 st.warning("No text content available for vocabulary analysis.")
+        
+        # TM-Style Repetition Analysis Section
+        if st.checkbox("🔄 Show Translation Memory Analysis (Like Memsource/memoQ)", value=False, key="show_tm_single"):
+            st.write("### Translation Memory Repetition Analysis")
+            st.info("💡 This analysis identifies exact and fuzzy repetitions of segments (sentences), just like CAT tools.")
+            
+            # Combine all text from analyzed pages
+            combined_text = ""
+            for url in st.session_state.analyzed_urls:
+                try:
+                    text = asyncio.run(fetch_website_text(url))
+                    combined_text += " " + text
+                except:
+                    pass
+            
+            if combined_text.strip():
+                with st.spinner("Analyzing repetitions..."):
+                    tm_results = analyze_repetitions(combined_text, fuzzy_threshold=75)
+                
+                # TM Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total Segments</div><div class="metric-value">{tm_results["total_segments"]:,}</div></div>', unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{tm_results["total_words"]:,}</div></div>', unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Unique Segments</div><div class="metric-value">{tm_results["unique_segments"]:,}</div></div>', unsafe_allow_html=True)
+                with col4:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Savings</div><div class="metric-value">{tm_results["savings_percentage"]:.1f}%</div></div>', unsafe_allow_html=True)
+                
+                # Breakdown by Match Type
+                st.write("#### Match Type Breakdown")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown(f"""
+                    <div class="metric-card" style="background-color: #d1fae5;">
+                        <div class="metric-label">100% Match</div>
+                        <div class="metric-value">{tm_results["segments_100"]}</div>
+                        <div class="metric-label">{tm_results["words_100"]:,} words</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""
+                    <div class="metric-card" style="background-color: #fef3c7;">
+                        <div class="metric-label">Fuzzy Match (75-99%)</div>
+                        <div class="metric-value">{tm_results["segments_fuzzy"]}</div>
+                        <div class="metric-label">{tm_results["words_fuzzy"]:,} words</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown(f"""
+                    <div class="metric-card" style="background-color: #fee2e2;">
+                        <div class="metric-label">New Segments</div>
+                        <div class="metric-value">{tm_results["segments_new"]}</div>
+                        <div class="metric-label">{tm_results["words_new"]:,} words</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Detailed Repetition Table
+                st.write("#### Top Repeated Segments")
+                st.write(f"💰 Total translation savings: **{tm_results['total_savings']:,} words**")
+                
+                if tm_results['repetition_details']:
+                    rep_data = []
+                    for detail in tm_results['repetition_details'][:50]:  # Show top 50
+                        rep_data.append({
+                            'Segment': detail['segment'],
+                            'Match Type': detail['type'],
+                            'Occurrences': detail['occurrences'],
+                            'Words/Segment': detail['words_per_segment'],
+                            'Total Words': detail['total_words'],
+                            'Savings': detail['savings']
+                        })
+                    
+                    df_tm = pd.DataFrame(rep_data)
+                    st.dataframe(df_tm, width="stretch")
+                    
+                    # CSV Export for TM Analysis
+                    csv_tm = df_tm.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download TM Analysis CSV",
+                        data=csv_tm,
+                        file_name="ulatus_tm_repetition_analysis.csv",
+                        mime="text/csv",
+                        key="download_tm_single"
+                    )
+                else:
+                    st.info("No repetitions found.")
+            else:
+                st.warning("No text content available for TM analysis.")
 
 with tab2:
     root_url = st.text_input(
@@ -503,6 +597,100 @@ with tab2:
                         st.info(f"No {unit} repeated 10 or more times.")
                 else:
                     st.warning("No text content available for vocabulary analysis.")
+            
+            # TM-Style Repetition Analysis Section for Full Crawl
+            if st.checkbox("🔄 Show Translation Memory Analysis (Like Memsource/memoQ)", value=False, key="show_tm_crawl"):
+                st.write("### Translation Memory Repetition Analysis - Entire Website")
+                st.info("💡 This analysis identifies exact and fuzzy repetitions of segments (sentences) across all crawled pages.")
+                
+                # Combine all text from crawled pages
+                combined_text = ""
+                for res in crawl_results:
+                    try:
+                        url = res['url']
+                        text = asyncio.run(fetch_website_text(url))
+                        combined_text += " " + text
+                    except:
+                        pass
+                
+                if combined_text.strip():
+                    with st.spinner("Analyzing repetitions across entire website... This may take a moment."):
+                        tm_results = analyze_repetitions(combined_text, fuzzy_threshold=75)
+                    
+                    # TM Metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Total Segments</div><div class="metric-value">{tm_results["total_segments"]:,}</div></div>', unsafe_allow_html=True)
+                    with col2:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Total Words</div><div class="metric-value">{tm_results["total_words"]:,}</div></div>', unsafe_allow_html=True)
+                    with col3:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Unique Segments</div><div class="metric-value">{tm_results["unique_segments"]:,}</div></div>', unsafe_allow_html=True)
+                    with col4:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Savings</div><div class="metric-value">{tm_results["savings_percentage"]:.1f}%</div></div>', unsafe_allow_html=True)
+                    
+                    # Breakdown by Match Type
+                    st.write("#### Match Type Breakdown")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown(f"""
+                        <div class="metric-card" style="background-color: #d1fae5;">
+                            <div class="metric-label">100% Match</div>
+                            <div class="metric-value">{tm_results["segments_100"]}</div>
+                            <div class="metric-label">{tm_results["words_100"]:,} words</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown(f"""
+                        <div class="metric-card" style="background-color: #fef3c7;">
+                            <div class="metric-label">Fuzzy Match (75-99%)</div>
+                            <div class="metric-value">{tm_results["segments_fuzzy"]}</div>
+                            <div class="metric-label">{tm_results["words_fuzzy"]:,} words</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col3:
+                        st.markdown(f"""
+                        <div class="metric-card" style="background-color: #fee2e2;">
+                            <div class="metric-label">New Segments</div>
+                            <div class="metric-value">{tm_results["segments_new"]}</div>
+                            <div class="metric-label">{tm_results["words_new"]:,} words</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Detailed Repetition Table
+                    st.write("#### Top Repeated Segments Across Website")
+                    st.write(f"💰 Total translation savings: **{tm_results['total_savings']:,} words** ({tm_results['savings_percentage']:.1f}%)")
+                    
+                    if tm_results['repetition_details']:
+                        rep_data = []
+                        for detail in tm_results['repetition_details'][:100]:  # Show top 100 for full crawl
+                            rep_data.append({
+                                'Segment': detail['segment'],
+                                'Match Type': detail['type'],
+                                'Occurrences': detail['occurrences'],
+                                'Words/Segment': detail['words_per_segment'],
+                                'Total Words': detail['total_words'],
+                                'Savings': detail['savings']
+                            })
+                        
+                        df_tm = pd.DataFrame(rep_data)
+                        st.dataframe(df_tm, width="stretch")
+                        
+                        # CSV Export for TM Analysis
+                        csv_tm = df_tm.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download TM Analysis CSV",
+                            data=csv_tm,
+                            file_name="ulatus_tm_repetition_analysis.csv",
+                            mime="text/csv",
+                            key="download_tm_crawl"
+                        )
+                    else:
+                        st.info("No repetitions found.")
+                else:
+                    st.warning("No text content available for TM analysis.")
 
 # --- FOOTER ---
 st.markdown("---")
