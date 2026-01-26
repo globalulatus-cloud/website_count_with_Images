@@ -5,6 +5,7 @@ from io import StringIO
 from logic.scraper import fetch_website_text
 from logic.counter import count_stats
 from logic.crawler import crawl_site
+from logic.vocabulary_analyzer import analyze_vocabulary, get_repetition_details
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -231,6 +232,68 @@ with tab1:
             mime="text/csv",
             key="download_single"
         )
+        
+        # Vocabulary Analysis Section
+        if st.checkbox("📊 Show Vocabulary Analysis", value=False, key="show_vocab_single"):
+            st.write("### Vocabulary Analysis")
+            
+            # Combine all text from analyzed pages
+            combined_text = ""
+            for url in st.session_state.analyzed_urls:
+                try:
+                    text = asyncio.run(fetch_website_text(url))
+                    combined_text += " " + text
+                except:
+                    pass
+            
+            if combined_text.strip():
+                vocab_stats = analyze_vocabulary(combined_text)
+                
+                # Display language type
+                lang_type = vocab_stats.get('language_type', 'Unknown')
+                unit = vocab_stats.get('unit', 'words')
+                st.info(f"📝 Language Type: **{lang_type}** | Analyzing: **{unit}**")
+                
+                # Vocabulary Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total {unit.title()}</div><div class="metric-value">{vocab_stats["total_words"]:,}</div></div>', unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Unique {unit.title()}</div><div class="metric-value">{vocab_stats["unique_words"]:,}</div></div>', unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Repeated {unit.title()}</div><div class="metric-value">{vocab_stats["repeated_words"]:,}</div></div>', unsafe_allow_html=True)
+                with col4:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Vocabulary Richness</div><div class="metric-value">{vocab_stats["vocabulary_richness"]}%</div></div>', unsafe_allow_html=True)
+                
+                # Most Common Words/Characters
+                st.write(f"#### Top 20 Most Common {unit.title()}")
+                common_words_data = [
+                    {f"{unit.title()[:-1] if unit.endswith('s') else unit.title()}": word, "Occurrences": count, "Repetitions": count - 1}
+                    for word, count in vocab_stats['most_common_words']
+                ]
+                df_common = pd.DataFrame(common_words_data)
+                st.dataframe(df_common, width="stretch")
+                
+                # Detailed Repetitions (words appearing 5+ times)
+                st.write(f"#### {unit.title()} Repeated 5+ Times")
+                repetition_details = get_repetition_details(combined_text, min_repetitions=5)
+                if repetition_details:
+                    df_repetitions = pd.DataFrame(repetition_details)
+                    st.dataframe(df_repetitions, width="stretch")
+                    
+                    # CSV Export for Vocabulary
+                    csv_vocab = df_repetitions.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Vocabulary Analysis CSV",
+                        data=csv_vocab,
+                        file_name="ulatus_vocabulary_analysis.csv",
+                        mime="text/csv",
+                        key="download_vocab_single"
+                    )
+                else:
+                    st.info(f"No {unit} repeated 5 or more times.")
+            else:
+                st.warning("No text content available for vocabulary analysis.")
 
 with tab2:
     root_url = st.text_input(
@@ -374,6 +437,72 @@ with tab2:
                 mime="text/csv",
                 key="download_crawl"
             )
+            
+            # Vocabulary Analysis Section
+            if st.checkbox("📊 Show Vocabulary Analysis", value=False, key="show_vocab_crawl"):
+                st.write("### Vocabulary Analysis - Entire Website")
+                
+                # Combine all text from crawled pages
+                combined_text = ""
+                for res in crawl_results:
+                    # Extract text from stats or re-fetch
+                    try:
+                        # Use cached text if available in results
+                        # Otherwise we'll need to work with what we have
+                        url = res['url']
+                        text = asyncio.run(fetch_website_text(url))
+                        combined_text += " " + text
+                    except:
+                        pass
+                
+                if combined_text.strip():
+                    vocab_stats = analyze_vocabulary(combined_text)
+                    
+                    # Display language type
+                    lang_type = vocab_stats.get('language_type', 'Unknown')
+                    unit = vocab_stats.get('unit', 'words')
+                    st.info(f"📝 Language Type: **{lang_type}** | Analyzing: **{unit}**")
+                    
+                    # Vocabulary Metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Total {unit.title()}</div><div class="metric-value">{vocab_stats["total_words"]:,}</div></div>', unsafe_allow_html=True)
+                    with col2:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Unique {unit.title()}</div><div class="metric-value">{vocab_stats["unique_words"]:,}</div></div>', unsafe_allow_html=True)
+                    with col3:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Repeated {unit.title()}</div><div class="metric-value">{vocab_stats["repeated_words"]:,}</div></div>', unsafe_allow_html=True)
+                    with col4:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">Vocabulary Richness</div><div class="metric-value">{vocab_stats["vocabulary_richness"]}%</div></div>', unsafe_allow_html=True)
+                    
+                    # Most Common Words/Characters
+                    st.write(f"#### Top 20 Most Common {unit.title()} Across All Pages")
+                    common_words_data = [
+                        {f"{unit.title()[:-1] if unit.endswith('s') else unit.title()}": word, "Occurrences": count, "Repetitions": count - 1}
+                        for word, count in vocab_stats['most_common_words']
+                    ]
+                    df_common = pd.DataFrame(common_words_data)
+                    st.dataframe(df_common, width="stretch")
+                    
+                    # Detailed Repetitions (words appearing 10+ times for large sites)
+                    st.write(f"#### {unit.title()} Repeated 10+ Times")
+                    repetition_details = get_repetition_details(combined_text, min_repetitions=10)
+                    if repetition_details:
+                        df_repetitions = pd.DataFrame(repetition_details)
+                        st.dataframe(df_repetitions, width="stretch")
+                        
+                        # CSV Export for Vocabulary
+                        csv_vocab = df_repetitions.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download Vocabulary Analysis CSV",
+                            data=csv_vocab,
+                            file_name="ulatus_vocabulary_analysis.csv",
+                            mime="text/csv",
+                            key="download_vocab_crawl"
+                        )
+                    else:
+                        st.info(f"No {unit} repeated 10 or more times.")
+                else:
+                    st.warning("No text content available for vocabulary analysis.")
 
 # --- FOOTER ---
 st.markdown("---")
