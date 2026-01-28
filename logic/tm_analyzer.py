@@ -1,14 +1,41 @@
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from collections import Counter
-import difflib
+
+def is_cjk_character(char: str) -> bool:
+    """Check if a character is CJK (Chinese, Japanese, Korean)"""
+    cjk_ranges = [
+        (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+        (0x3400, 0x4DBF),    # CJK Unified Ideographs Extension A
+        (0x20000, 0x2A6DF),  # CJK Unified Ideographs Extension B
+        (0x2A700, 0x2B73F),  # CJK Unified Ideographs Extension C
+        (0x2B740, 0x2B81F),  # CJK Unified Ideographs Extension D
+        (0x3040, 0x309F),    # Hiragana
+        (0x30A0, 0x30FF),    # Katakana
+        (0xAC00, 0xD7AF),    # Hangul Syllables
+    ]
+    code = ord(char)
+    return any(start <= code <= end for start, end in cjk_ranges)
+
+def detect_language_type(text: str) -> str:
+    """Detect if text is primarily CJK or Latin-based"""
+    if not text:
+        return "unknown"
+    
+    # Sample first 1000 characters for detection
+    sample = text[:1000]
+    cjk_count = sum(1 for char in sample if is_cjk_character(char))
+    
+    # If more than 30% CJK characters, treat as CJK
+    if cjk_count / len(sample) > 0.3:
+        return "cjk"
+    return "latin"
 
 def segment_text(text: str) -> List[str]:
     """
     Segment text into sentences/segments similar to CAT tools
     """
     # Split by common sentence terminators
-    # This mimics how CAT tools segment content
     segments = re.split(r'(?<=[.!?。！？])\s+|\n+', text)
     
     # Clean and filter segments
@@ -18,27 +45,18 @@ def segment_text(text: str) -> List[str]:
 
 def normalize_segment(segment: str) -> str:
     """
-    Normalize segment for comparison (like CAT tools do)
+    Normalize segment for comparison
     - Remove extra whitespace
-    - Normalize punctuation spacing
     - Keep case and punctuation for accurate matching
     """
-    # Normalize whitespace
     normalized = re.sub(r'\s+', ' ', segment)
     normalized = normalized.strip()
     
     return normalized
 
-def calculate_similarity(seg1: str, seg2: str) -> float:
-    """
-    Calculate similarity between two segments (0-100%)
-    Similar to fuzzy matching in CAT tools
-    """
-    return difflib.SequenceMatcher(None, seg1, seg2).ratio() * 100
-
 def count_words_in_segment(segment: str) -> int:
     """
-    Count words in a segment (for word count)
+    Count words/characters in a segment
     Handles both Latin and CJK text
     """
     # Check if CJK
@@ -53,180 +71,91 @@ def count_words_in_segment(segment: str) -> int:
         words = segment.split()
         return len(words)
 
-def analyze_repetitions(text: str, fuzzy_threshold: int = 75) -> Dict:
+def analyze_repetitions(text: str) -> Dict:
     """
-    Analyze text repetitions like Memsource/memoQ
+    Simple TM-style analysis:
+    - Total word/character count
+    - Repetitions count (segments that appear more than once)
+    - Unique count (segments that appear only once)
     
-    Returns:
-    - Total segments
-    - Total words
-    - 100% match repetitions (exact duplicates)
-    - Fuzzy match repetitions (75-99% similar)
-    - New segments (unique content)
-    - Word count breakdown
+    Automatically handles both Latin (words) and CJK (characters)
     """
+    # Detect language type
+    language_type = detect_language_type(text)
+    unit = "characters" if language_type == "cjk" else "words"
+    
     # Segment the text
     segments = segment_text(text)
     
     if not segments:
         return {
+            'language_type': language_type.upper(),
+            'unit': unit,
             'total_segments': 0,
             'total_words': 0,
-            'repetitions_100': 0,
-            'repetitions_fuzzy': 0,
-            'new_segments': 0,
-            'words_100': 0,
-            'words_fuzzy': 0,
-            'words_new': 0,
-            'repetition_details': [],
-            'segment_breakdown': []
+            'unique_segments': 0,
+            'repeated_segments': 0,
+            'repetition_words': 0,
+            'unique_words': 0,
+            'repetition_details': []
         }
     
     # Normalize segments
     normalized_segments = [normalize_segment(s) for s in segments]
     
-    # Count occurrences of each segment (100% matches)
+    # Count occurrences of each segment
     segment_counts = Counter(normalized_segments)
     
-    # Calculate total words
+    # Calculate total words/characters
     total_words = sum(count_words_in_segment(s) for s in normalized_segments)
     
-    # Categorize segments
-    segment_analysis = []
-    processed = set()
+    # Separate into unique and repeated
+    unique_segments_list = []
+    repeated_segments_list = []
     
-    for i, segment in enumerate(normalized_segments):
-        if segment in processed:
-            continue
-        
+    for segment, count in segment_counts.items():
         word_count = count_words_in_segment(segment)
-        occurrence_count = segment_counts[segment]
         
-        if occurrence_count > 1:
-            # 100% match (exact repetition)
-            segment_analysis.append({
+        if count == 1:
+            # Unique (appears only once)
+            unique_segments_list.append({
                 'segment': segment[:100] + '...' if len(segment) > 100 else segment,
                 'full_segment': segment,
-                'type': '100%',
-                'occurrences': occurrence_count,
-                'repetitions': occurrence_count - 1,
+                'occurrences': 1,
                 'words_per_segment': word_count,
-                'total_words': word_count * occurrence_count,
-                'savings': word_count * (occurrence_count - 1)  # Words saved by repetition
+                'total_words': word_count
             })
-            processed.add(segment)
         else:
-            # Check for fuzzy matches
-            fuzzy_matches = []
-            for j, other_segment in enumerate(normalized_segments):
-                if i != j and other_segment not in processed:
-                    similarity = calculate_similarity(segment, other_segment)
-                    if fuzzy_threshold <= similarity < 100:
-                        fuzzy_matches.append((other_segment, similarity))
-            
-            if fuzzy_matches:
-                # Fuzzy match found
-                total_fuzzy_words = word_count * (1 + len(fuzzy_matches))
-                segment_analysis.append({
-                    'segment': segment[:100] + '...' if len(segment) > 100 else segment,
-                    'full_segment': segment,
-                    'type': f'Fuzzy ({fuzzy_threshold}-99%)',
-                    'occurrences': 1 + len(fuzzy_matches),
-                    'repetitions': len(fuzzy_matches),
-                    'words_per_segment': word_count,
-                    'total_words': total_fuzzy_words,
-                    'savings': int(total_fuzzy_words * 0.3)  # Approximate 30% savings for fuzzy
-                })
-                processed.add(segment)
-                for fm, _ in fuzzy_matches:
-                    processed.add(fm)
-            else:
-                # New segment (no matches)
-                segment_analysis.append({
-                    'segment': segment[:100] + '...' if len(segment) > 100 else segment,
-                    'full_segment': segment,
-                    'type': 'New',
-                    'occurrences': 1,
-                    'repetitions': 0,
-                    'words_per_segment': word_count,
-                    'total_words': word_count,
-                    'savings': 0
-                })
-                processed.add(segment)
+            # Repeated (appears 2+ times)
+            repeated_segments_list.append({
+                'segment': segment[:100] + '...' if len(segment) > 100 else segment,
+                'full_segment': segment,
+                'occurrences': count,
+                'words_per_segment': word_count,
+                'total_words': word_count * count,
+                'repetition_count': count - 1  # How many times it's repeated
+            })
     
-    # Calculate totals by category
-    segments_100 = sum(1 for s in segment_analysis if s['type'] == '100%')
-    segments_fuzzy = sum(1 for s in segment_analysis if 'Fuzzy' in s['type'])
-    segments_new = sum(1 for s in segment_analysis if s['type'] == 'New')
+    # Sort repeated by most occurrences first
+    repeated_segments_list.sort(key=lambda x: x['occurrences'], reverse=True)
     
-    words_100 = sum(s['total_words'] for s in segment_analysis if s['type'] == '100%')
-    words_fuzzy = sum(s['total_words'] for s in segment_analysis if 'Fuzzy' in s['type'])
-    words_new = sum(s['total_words'] for s in segment_analysis if s['type'] == 'New')
+    # Calculate counts
+    unique_segment_count = len(unique_segments_list)
+    repeated_segment_count = len(repeated_segments_list)
     
-    # Calculate repetition counts (how many times segments are repeated)
-    repetitions_100_count = sum(s['repetitions'] for s in segment_analysis if s['type'] == '100%')
-    repetitions_fuzzy_count = sum(s['repetitions'] for s in segment_analysis if 'Fuzzy' in s['type'])
-    
-    # Calculate total savings
-    total_savings = sum(s['savings'] for s in segment_analysis)
-    
-    # Sort by savings (most valuable repetitions first)
-    segment_analysis.sort(key=lambda x: x['savings'], reverse=True)
+    # Calculate word/character counts
+    unique_words = sum(item['total_words'] for item in unique_segments_list)
+    repetition_words = sum(item['total_words'] for item in repeated_segments_list)
     
     return {
+        'language_type': language_type.upper(),
+        'unit': unit,
         'total_segments': len(segments),
         'total_words': total_words,
-        'unique_segments': len(segment_counts),
-        
-        # Segment counts
-        'segments_100': segments_100,
-        'segments_fuzzy': segments_fuzzy,
-        'segments_new': segments_new,
-        
-        # Word counts
-        'words_100': words_100,
-        'words_fuzzy': words_fuzzy,
-        'words_new': words_new,
-        
-        # Repetition counts
-        'repetitions_100_count': repetitions_100_count,
-        'repetitions_fuzzy_count': repetitions_fuzzy_count,
-        
-        # Savings
-        'total_savings': total_savings,
-        'savings_percentage': (total_savings / total_words * 100) if total_words > 0 else 0,
-        
-        # Detailed breakdown
-        'repetition_details': segment_analysis[:100],  # Top 100 most repeated
-        
-        # Summary for display
-        'summary': {
-            '100% Match': {'segments': segments_100, 'words': words_100},
-            'Fuzzy Match': {'segments': segments_fuzzy, 'words': words_fuzzy},
-            'New': {'segments': segments_new, 'words': words_new}
-        }
+        'unique_segments': unique_segment_count,
+        'repeated_segments': repeated_segment_count,
+        'unique_words': unique_words,
+        'repetition_words': repetition_words,
+        'repetition_details': repeated_segments_list,
+        'unique_details': unique_segments_list
     }
-
-def get_repetition_summary(results: Dict) -> str:
-    """
-    Generate a summary string similar to CAT tool analysis
-    """
-    summary = f"""
-Translation Memory Analysis Summary:
-=====================================
-Total Segments: {results['total_segments']:,}
-Total Words: {results['total_words']:,}
-Unique Segments: {results['unique_segments']:,}
-
-Breakdown:
-----------
-100% Match: {results['segments_100']} segments ({results['words_100']:,} words)
-Fuzzy Match: {results['segments_fuzzy']} segments ({results['words_fuzzy']:,} words)
-New: {results['segments_new']} segments ({results['words_new']:,} words)
-
-Translation Savings:
--------------------
-Words saved by repetitions: {results['total_savings']:,}
-Savings percentage: {results['savings_percentage']:.2f}%
-"""
-    return summary
