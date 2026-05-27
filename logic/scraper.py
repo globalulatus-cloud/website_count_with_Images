@@ -1,84 +1,94 @@
 import re
-import httpx
-import trafilatura
+from typing import Dict, List
+from urllib.parse import urljoin
+
+import aiohttp
 from bs4 import BeautifulSoup
 
 
-def clean_text(text: str) -> str:
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _clean_text(text: str) -> str:
     if not text:
         return ""
-
-    text = text.replace("\u00a0", " ")
+    text = text.replace(" ", " ")
     text = re.sub(r"\s+", " ", text).strip()
-
     return text
 
 
-def extract_title_from_html(html: str, fallback: str = "") -> str:
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-
-        if soup.title and soup.title.string:
-            return soup.title.string.strip()
-
-    except Exception:
-        pass
-
-    return fallback
+def _extract_visible_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg"]):
+        tag.decompose()
+    return _clean_text(soup.get_text(separator=" ", strip=True))
 
 
-async def fetch_website_text(url: str):
+async def _fetch_html(url: str, timeout: int = 30) -> str:
+    headers = {"User-Agent": USER_AGENT}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url, timeout=timeout, allow_redirects=True) as response:
+            response.raise_for_status()
+            return await response.text(errors="ignore")
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/124.0 Safari/537.36"
-        )
+
+async def fetch_website_text(url: str) -> str:
+    html = await _fetch_html(url)
+    return _extract_visible_text(html)
+
+
+async def analyze_images_from_url(url: str) -> Dict:
+    html = await _fetch_html(url)
+    soup = BeautifulSoup(html, "html.parser")
+    images = soup.find_all("img")
+
+    image_stats = {
+        "total_images": len(images),
+        "images_with_alt": 0,
+        "images_without_alt": 0,
+        "images_with_title": 0,
     }
 
-    async with httpx.AsyncClient(
-        headers=headers,
-        timeout=60,
-        follow_redirects=True
-    ) as client:
+    for img in images:
+        alt = (img.get("alt") or "").strip()
+        title = (img.get("title") or "").strip()
 
-        response = await client.get(url)
+        if alt:
+            image_stats["images_with_alt"] += 1
+        else:
+            image_stats["images_without_alt"] += 1
 
-        html = response.text
+        if title:
+            image_stats["images_with_title"] += 1
 
-    title = extract_title_from_html(html, fallback=url)
+    return image_stats
 
-    extracted = trafilatura.extract(
-        html,
-        include_comments=False,
-        include_tables=False,
-        include_links=False,
-        include_images=False,
-        output_format="txt"
-    )
 
-    if extracted:
-        text = clean_text(extracted)
+async def get_image_details_from_url(url: str) -> List[Dict]:
+    html = await _fetch_html(url)
+    soup = BeautifulSoup(html, "html.parser")
+    images = soup.find_all("img")
+    image_details = []
 
-    else:
-        soup = BeautifulSoup(html, "html.parser")
+    for img in images:
+        src = (img.get("src") or "").strip()
+        if src:
+            src = urljoin(url, src)
 
-        for tag in soup([
-            "script",
-            "style",
-            "nav",
-            "footer",
-            "header",
-            "aside",
-            "noscript"
-        ]):
-            tag.decompose()
+        alt = (img.get("alt") or "").strip()
+        title = (img.get("title") or "").strip()
+        data_attrs = [k for k in img.attrs.keys() if k.startswith("data-")]
 
-        text = clean_text(
-            soup.get_text(separator=" ", strip=True)
-        )
+        image_details.append({
+            "src": src,
+            "alt": alt if alt else None,
+            "title": title if title else None,
+            "has_metadata": bool(alt or title or data_attrs),
+            "data_attributes": data_attrs,
+        })
 
-    return text, title, html
+    return image_details
