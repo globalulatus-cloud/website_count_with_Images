@@ -1,122 +1,175 @@
+import asyncio
+from typing import Set, List, Dict, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
-import httpx
-import trafilatura
+import aiohttp
 from bs4 import BeautifulSoup
 
 from logic.counter import count_stats
 
 
-def normalize_url(url):
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
+SKIP_EXTENSIONS = (
+    ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip",
+    ".mp4", ".mp3", ".doc", ".docx", ".xls", ".xlsx",
+    ".css", ".js", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".eot"
+)
+
+
+def normalize_url(url: str) -> str:
+    parsed = urlparse(url)
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    return urlunparse((scheme, netloc, path, "", "", ""))
+
+
+def is_valid_url(url: str, root_domain: str, follow_external: bool) -> bool:
     parsed = urlparse(url)
 
-    return urlunparse((
-        parsed.scheme,
-        parsed.netloc,
-        parsed.path,
-        "",
-        "",
-        ""
-    ))
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    if any(parsed.path.lower().endswith(ext) for ext in SKIP_EXTENSIONS):
+        return False
+
+    if follow_external:
+        return True
+
+    return parsed.netloc.lower() == root_domain.lower()
 
 
-def clean_text(text):
-
+def clean_text(text: str) -> str:
     if not text:
         return ""
+    return " ".join(text.replace(" ", " ").split())
 
-    return " ".join(text.split())
+
+def extract_title_from_html(html: str, fallback: str = "") -> str:
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+            if title:
+                return title
+    except Exception:
+        pass
+    return fallback
 
 
-async def crawl_site(root_url, max_pages=100):
+def extract_text_from_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg"]):
+        tag.decompose()
+    return clean_text(soup.get_text(separator=" ", strip=True))
 
-    visited = set()
-    queue = [root_url]
 
-    results = []
-
-    root_domain = urlparse(root_url).netloc
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/124.0 Safari/537.36"
-        )
-    }
-
-    async with httpx.AsyncClient(
-        headers=headers,
-        timeout=60,
-        follow_redirects=True
-    ) as client:
-
-        while queue and len(visited) < max_pages:
-
-            current_url = normalize_url(queue.pop(0))
-
-            if current_url in visited:
+def extract_links_from_html(html: str, base_url: str, root_domain: str, follow_external: bool) -> List[str]:
+    links = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith(("mailto:", "tel:", "javascript:", "#")):
                 continue
 
-            visited.add(current_url)
+            absolute = urljoin(base_url, href)
+            absolute = normalize_url(absolute)
 
-            try:
+            if is_valid_url(absolute, root_domain, follow_external):
+                links.append(absolute)
+    except Exception:
+        pass
 
-                response = await client.get(current_url)
+    seen = set()
+    out = []
+    for item in links:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
 
-                html = response.text
 
-                soup = BeautifulSoup(html, "html.parser")
+class EnhancedWebsiteCrawler:
+    def __init__(self, root_url: str, max_pages: Optional[int] = None,
+                 max_depth: int = 5, follow_external: bool = False):
+        self.root_url = normalize_url(root_url)
+        self.max_pages = max_pages
+        self.max_depth = max_depth
+        self.follow_external = follow_external
+        self.visited_urls: Set[str] = set()
+        self.results: List[Dict] = []
+        self.domain = urlparse(self.root_url).netloc
+        self.errors: List[Dict] = []
 
-                title = (
-                    soup.title.string.strip()
-                    if soup.title and soup.title.string
-                    else current_url
-                )
+    async def _fetch_html(self, session: aiohttp.ClientSession, url: str) -> str:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as response:
+            response.raise_for_status()
+            return await response.text(errors="ignore")
 
-                extracted = trafilatura.extract(html)
+    async def crawl_page(self, session: aiohttp.ClientSession, url: str, depth: int):
+        if url in self.visited_urls:
+            return
 
-                if extracted:
-                    text = clean_text(extracted)
-                else:
-                    text = clean_text(
-                        soup.get_text(separator=" ", strip=True)
-                    )
+        if self.max_pages is not None and len(self.visited_urls) >= self.max_pages:
+            return
 
-                stats = count_stats(text)
+        self.visited_urls.add(url)
 
-                results.append({
-                    "url": current_url,
-                    "title": title,
-                    "stats": stats
-                })
+        try:
+            html = await self._fetch_html(session, url)
+            title = extract_title_from_html(html, fallback=url)
+            text = extract_text_from_html(html)
+            stats = count_stats(text)
 
-                for a in soup.find_all("a", href=True):
+            self.results.append({
+                "url": url,
+                "title": title,
+                "stats": stats
+            })
 
-                    href = urljoin(current_url, a["href"])
+            if depth >= self.max_depth:
+                return
 
-                    parsed = urlparse(href)
+            links = extract_links_from_html(html, url, self.domain, self.follow_external)
+            for link in links:
+                if self.max_pages is not None and len(self.visited_urls) >= self.max_pages:
+                    break
+                if link not in self.visited_urls:
+                    await self.crawl_page(session, link, depth + 1)
 
-                    if root_domain in parsed.netloc:
+        except Exception as e:
+            self.errors.append({
+                "url": url,
+                "error": str(e)
+            })
+            self.results.append({
+                "url": url,
+                "title": "Fetch failed",
+                "stats": {
+                    "count": 0,
+                    "type": "words",
+                    "language_group": f"Error: {str(e)}"
+                }
+            })
 
-                        clean_url = normalize_url(href)
+    async def crawl(self) -> List[Dict]:
+        headers = {"User-Agent": USER_AGENT}
+        connector = aiohttp.TCPConnector(ssl=False)
 
-                        if clean_url not in visited:
-                            queue.append(clean_url)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            await self.crawl_page(session, self.root_url, 0)
 
-            except Exception as e:
+        return self.results
 
-                results.append({
-                    "url": current_url,
-                    "title": "Fetch failed",
-                    "stats": {
-                        "count": 0,
-                        "type": "words",
-                        "language_group": f"Error: {str(e)}"
-                    }
-                })
 
+async def crawl_site(root_url: str, max_pages: Optional[int] = None,
+                    max_depth: int = 5, follow_external: bool = False) -> List[Dict]:
+    crawler = EnhancedWebsiteCrawler(root_url, max_pages, max_depth, follow_external)
+    results = await crawler.crawl()
     return results
